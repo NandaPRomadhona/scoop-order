@@ -14,7 +14,7 @@ import (
 	"scoop-order/cmd/src"
 	"scoop-order/internal/configs"
 	"scoop-order/internal/schemas"
-	"scoop-order/playgroud"
+	"scoop-order/playground"
 	"scoop-order/repository"
 	"strconv"
 	"strings"
@@ -401,7 +401,7 @@ func (server *Server) CompletePayment() {
 		var newRespPayment map[string]interface{}
 
 		//json.NewDecoder(respPayment.Body).Decode(&newRespPayment)
-		json.Unmarshal([]byte(playgroud.VASuccessResponse), &newRespPayment)
+		json.Unmarshal([]byte(playground.VASuccessResponse), &newRespPayment)
 		if newRespPayment["transaction_status"] == "settlement" {
 			currentOrderStatus = 90000
 			CompletePaymentTxParams := schemas.PaymentTxParams{
