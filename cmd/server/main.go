@@ -3,15 +3,17 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis"
 	_ "github.com/lib/pq"
+	"github.com/newrelic/go-agent/v3/integrations/nrgin"
+	"github.com/newrelic/go-agent/v3/newrelic"
 	"log"
 	"os"
 	app2 "scoop-order/cmd/api"
 	"scoop-order/internal/configs"
 	"scoop-order/repository/transactions"
+	"time"
 )
 
 const(
@@ -23,6 +25,7 @@ var (
 	WarningLogger *log.Logger
 	InfoLogger    *log.Logger
 	ErrorLogger   *log.Logger
+	NewRelicApp *newrelic.Application
 )
 
 func init() {
@@ -34,11 +37,30 @@ func init() {
 	WarningLogger = log.New(file, "WARNING: ", log.LstdFlags|log.Lshortfile)
 	ErrorLogger = log.New(file, "ERROR: ", log.LstdFlags|log.Lshortfile)
 	Logger = log.Default()
+
+	NewRelicApp, _ = newrelic.NewApplication(
+		newrelic.ConfigAppName("scoop-order"),
+		newrelic.ConfigLicense("d9ef899b2a9a369fbd28a7a67193806f433cNRAL"),
+		newrelic.ConfigDistributedTracerEnabled(true),
+	)
 	//InfoLogger.SetPrefix("INFO: ")
 	//WarningLogger = log.Default()
 	//WarningLogger.SetPrefix("WARNING: ")
 	//ErrorLogger = log.Default()
 	//ErrorLogger.SetPrefix("ERROR: ")
+}
+
+func LogFormatter(param gin.LogFormatterParams) string {
+	return fmt.Sprintf("%s - [%s] \"%s %s %s %d %s \"%s\" %s\"\n",
+		param.ClientIP,
+		param.TimeStamp.Format(time.RFC1123),
+		param.Method,
+		param.Path,
+		param.Request.Proto,
+		param.StatusCode,
+		param.Latency,
+		param.Request.UserAgent(),
+		param.ErrorMessage)
 }
 
 
@@ -61,7 +83,9 @@ func main()  {
 	})
 	// create router dependency
 	router := gin.Default()
-	router.Use(cors.Default())
+	router.Use(gin.Recovery())
+	router.Use(nrgin.Middleware(NewRelicApp))
+	//router.Use(gin.LoggerWithFormatter(LogFormatter))
 
 	transaction := transactions.NewTransaction(conn, clientRedis)
 	server := app2.NewServer(router, transaction, Logger, WarningLogger, InfoLogger, ErrorLogger)
