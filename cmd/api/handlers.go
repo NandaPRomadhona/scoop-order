@@ -37,6 +37,18 @@ func (server *Server) ApiStatus() gin.HandlerFunc {
 	}
 }
 
+func (server *Server) GetPaymentGateway() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		paymentGateways, err := server.transaction.SelectPaymentGateways(ctx)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, errorResponse(err))
+			return
+		}
+
+		ctx.IndentedJSON(http.StatusOK, paymentGateways)
+	}
+}
+
 func (server *Server) GetOrderList() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var req schemas.GetOrderListRequest
@@ -164,10 +176,10 @@ func (server *Server) GetValidPrice(ctx *gin.Context) {
 	}
 	pricingOffer, err := server.transaction.PricingTx(ctx, checkPricingParam)
 	if err != nil {
-		ctx.IndentedJSON(http.StatusConflict, err)
+		ctx.JSON(http.StatusConflict, errorResponse(err))
 		return
 	}
-	ctx.IndentedJSON(http.StatusOK, successResponse(err.Error(), pricingOffer))
+	ctx.IndentedJSON(http.StatusOK, successResponse("Success", pricingOffer))
 	return
 }
 
@@ -192,7 +204,13 @@ func (server *Server) Checkout(ctx *gin.Context) {
 		return
 	}
 
-	apiKey := ctx.Request.Header["Signature"][0]
+	userAgent := ctx.Request.Header["User-Agent"][0]
+	var clientId int32
+	if strings.Contains(strings.ToLower(userAgent), "ebook-web") {
+		clientId = 7
+	}
+
+	apiKey := req.Signature
 	signatureHash := src.GenerateSignature(userData.UserID, req.OfferID, req.PaymentGatewayID)
 
 	if apiKey != hex.EncodeToString(signatureHash[:]) {
@@ -208,6 +226,7 @@ func (server *Server) Checkout(ctx *gin.Context) {
 		PlatformID:       req.PlatformID,
 		PaymentGatewayID: req.PaymentGatewayID,
 		GeoInfo:          req.GeoInfo,
+		ClientID:         clientId,
 	}
 
 	// Create orders (NEW)
@@ -217,8 +236,9 @@ func (server *Server) Checkout(ctx *gin.Context) {
 		return
 	}
 	var payment map[string]interface{}
-	var paymentStatus int32
-	if checkout.FinalAmount == 0{
+	var paymentStatus int32 = configs.PaymentError
+	if checkout.FinalAmount == 0 {
+		// Free Order
 		checkout.OrderStatus = configs.OrderComplete
 		paymentStatus = configs.PaymentBilled
 		server.Logger.SetPrefix("DEBUG - ")
@@ -232,16 +252,17 @@ func (server *Server) Checkout(ctx *gin.Context) {
 		server.Logger.Println("=========== Hit Payment =============")
 		paymentGateway, _ := server.transaction.SelectPaymentGateway(ctx, req.PaymentGatewayID)
 		payment, err = server.Payment(checkout, paymentGateway)
-		paymentStatus = configs.PaymentInProcess
 
 		if err != nil {
+			// Update Order data
 			ctx.JSON(http.StatusInternalServerError, errorResponse(fmt.Errorf("hit Payment : %s", err.Error())))
 			return
 		}
+
+		paymentStatus = configs.PaymentInProcess
 		checkout.OrderStatus = configs.OrderWaitingForPayment
 	}
 
-	// Update Order data (WAITING_FOR_PAYMENT = 20001)
 	err = server.transaction.PaymentTx(ctx, checkout, paymentStatus)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, errorResponse(fmt.Errorf("PaymentTX : %s", err.Error())))
@@ -257,7 +278,7 @@ func (server *Server) Checkout(ctx *gin.Context) {
 	server.Logger.Println("Complete in :", time.Since(startTime))
 	server.Logger.Println("=========== Response =============")
 	server.Logger.Println(response)
-	ctx.JSON(http.StatusOK, successResponse("Success Create Order", response))
+	ctx.JSON(http.StatusCreated, successResponse("Success Create Order", response))
 	return
 
 }
@@ -265,8 +286,8 @@ func (server *Server) Checkout(ctx *gin.Context) {
 func (server *Server) Payment(checkout schemas.CheckoutTxResult, paymentGateway repository.SelectPaymentGatewaysRow) (map[string]interface{}, error) {
 	type payRes struct {
 		Data       map[string]interface{} `json:"data"`
-		Message    string      `json:"message"`
-		statusCode string      `json:"statusCode"`
+		Message    string                 `json:"message"`
+		statusCode string                 `json:"statusCode"`
 	}
 	var newRespPayment payRes
 	user, _ := server.transaction.SelectUser(context.Background(), checkout.UserID)
@@ -282,22 +303,22 @@ func (server *Server) Payment(checkout schemas.CheckoutTxResult, paymentGateway 
 			bankName := strings.TrimPrefix(strings.ToLower(paymentGateway.Name), "va bank ")
 			var items []map[string]interface{}
 			for _, ol := range checkout.Orderline {
-				offer,_ := server.transaction.SelectOfferByID(context.Background(), ol.OfferID)
+				offer, _ := server.transaction.SelectOfferByID(context.Background(), ol.OfferID)
 				olItem := map[string]interface{}{
-					"id" : fmt.Sprintf("%d", ol.ID),
-					"price": ol.FinalPrice,
-					"quantity":1,
-					"name":offer.Name.String,
+					"id":       fmt.Sprintf("%d", ol.ID),
+					"price":    ol.FinalPrice,
+					"quantity": 1,
+					"name":     offer.Name.String,
 				}
 				items = append(items, olItem)
 			}
 			requestByte, err = json.Marshal(map[string]interface{}{
-				"order_id": fmt.Sprintf("%d",checkout.OrderNumber),
-				"bank":    bankName,
-				"email":   user.Email,
+				"order_id": fmt.Sprintf("%d", checkout.OrderNumber),
+				"bank":     bankName,
+				"email":    user.Email,
 				"username": user.UserName,
-				"amount":  checkout.FinalAmount,
-				"items": items,
+				"amount":   checkout.FinalAmount,
+				"items":    items,
 			})
 			if err != nil {
 				log.Fatal(err)
@@ -321,7 +342,7 @@ func (server *Server) Payment(checkout schemas.CheckoutTxResult, paymentGateway 
 			respPayment, err = ioutil.ReadAll(res.Body)
 			server.Logger.Println("Response Body (payment) :", string(respPayment))
 
-			if res.StatusCode != 201{
+			if res.StatusCode != 201 {
 				return newRespPayment.Data, fmt.Errorf(" Error Payments : %s", string(respPayment))
 			}
 
@@ -330,11 +351,76 @@ func (server *Server) Payment(checkout schemas.CheckoutTxResult, paymentGateway 
 			if err != nil {
 				fmt.Println("Error 3:", err)
 			}
+		} else if strings.Contains(strings.ToLower(paymentGateway.Name), "gopay") {
+			url := baseURL + "/gopay"
+			var items []map[string]interface{}
+			for _, ol := range checkout.Orderline {
+				offer, _ := server.transaction.SelectOfferByID(context.Background(), ol.OfferID)
+				olItem := map[string]interface{}{
+					"id":       fmt.Sprintf("%d", ol.ID),
+					"price":    ol.FinalPrice,
+					"quantity": 1,
+					"name":     offer.Name.String,
+				}
+				items = append(items, olItem)
+			}
+			type detailGopay struct {
+				EnableCallback bool `json:"enable_callback"`
+			}
+			requestByte, err = json.Marshal(map[string]interface{}{
+				"order_id":     fmt.Sprintf("%d", checkout.OrderNumber),
+				"email":        user.Email,
+				"amount":       checkout.FinalAmount,
+				"payment_type": "gopay",
+				"gopay":        detailGopay{
+					EnableCallback: true,
+				},
+				"items":        items,
+			})
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			client := &http.Client{}
+			reqPayment, err := http.NewRequest(method, url, bytes.NewReader(requestByte))
+			if err != nil {
+				fmt.Println("Error 1:", err)
+			}
+			reqPayment.Header.Add("Authorization", base64.StdEncoding.EncodeToString([]byte(configs.AuthCoopPayment)))
+			reqPayment.Header.Add("Content-Type", "application/json")
+
+			server.Logger.Println("Request Body (payment) :", string(requestByte))
+
+			res, err := client.Do(reqPayment)
+			if err != nil {
+				fmt.Println("Error 2:", err)
+			}
+
+			respPayment, err = ioutil.ReadAll(res.Body)
+			server.Logger.Println("Response Body (payment) :", string(respPayment))
+
+			if res.StatusCode != 201 {
+				return newRespPayment.Data, fmt.Errorf(" Error Payments : %s", string(respPayment))
+			}
+
+			defer res.Body.Close()
+
+			if err != nil {
+				fmt.Println("Error 3:", err)
+			}
+		} else {
+			return newRespPayment.Data, fmt.Errorf(" Payment is not available")
 		}
+
+		json.Unmarshal(respPayment, &newRespPayment)
+		return newRespPayment.Data, nil
+
+	} else {
+		return newRespPayment.Data, fmt.Errorf(" Payment is not available")
 	}
 
-	json.Unmarshal(respPayment, &newRespPayment)
-	return newRespPayment.Data, nil
+	//json.Unmarshal(respPayment, &newRespPayment)
+	//return newRespPayment.Data, nil
 }
 
 func (server *Server) Complete(ctx *gin.Context) {
@@ -344,7 +430,7 @@ func (server *Server) Complete(ctx *gin.Context) {
 
 	var req schemas.CompleteRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf(" GetOrderList : %s", err.Error())))
+		ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf(" Complete Request : %s", err.Error())))
 		return
 	}
 	server.Logger.Println("Data Request: ", req)
@@ -371,6 +457,45 @@ func (server *Server) Complete(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, successResponse(" Complete Order Success", status))
 }
 
+func (server *Server) CompleteOrder(ctx *gin.Context) {
+	server.Logger.SetPrefix("DEBUG - ")
+	server.Logger.Println("=========== Request =============")
+	startTime := time.Now()
+
+	var req schemas.CompleteOrderRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf(" Complete Order Request : %s", err.Error())))
+		return
+	}
+	server.Logger.Println("Data Request: ", req)
+
+	if req.TransactionStatus == "settlement" {
+		orderNumber, err := strconv.ParseInt(req.OrderID, 10, 64)
+		order, err := server.transaction.SelectOrderByOrderNumber(context.Background(), orderNumber)
+		if err != nil {
+			ctx.IndentedJSON(http.StatusConflict, err)
+		}
+		fmt.Println("Complete Order ID: ", order.ID)
+
+		CompletePaymentTxParams := schemas.PaymentTxParams{
+			OrderID:       order.ID,
+			OrderStatus:   int32(configs.OrderComplete),
+			PaymentStatus: int32(configs.PaymentBilled),
+		}
+		status, err := server.transaction.CompletePaymentTx(context.Background(), CompletePaymentTxParams)
+		if err != nil {
+			log.Fatal(fmt.Errorf("[Failed] Update Complete Data: %s", err.Error()))
+			ctx.JSON(http.StatusInternalServerError, errorResponse(err))
+		}
+		server.Logger.Println("=========== End Request =============")
+		server.Logger.Println("Complete in :", time.Since(startTime))
+		ctx.JSON(http.StatusOK, successResponse(" Complete Order Success", status))
+	} else {
+		ctx.JSON(http.StatusOK, successResponse(" Update Order Success", nil))
+	}
+
+}
+
 func (server *Server) CompletePayment() {
 	// Get Pending Order
 	//arg := repository.SelectOrderParams{
@@ -381,51 +506,96 @@ func (server *Server) CompletePayment() {
 	order, _ := server.transaction.SelectOrderByOrderNumber(context.Background(), 32021612217630)
 
 	//for _, order := range orders {
-		var currentOrderStatus int32
-		// Check Payment Status
-		// url : http://localhost:5000/check-status
-		type reqParam struct {
-			orderID string `json:"order_id"`
-		}
-		request := reqParam{
-			orderID: fmt.Sprintf("%d", order.OrderNumber),
-		}
-		requestJson, err := json.Marshal(request)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(string(requestJson))
-		//resp, err := http.Post("http://localhost:5000/va", "application/json",
-		//	bytes.NewBuffer(requestJson))
-
-		var newRespPayment map[string]interface{}
-
-		//json.NewDecoder(respPayment.Body).Decode(&newRespPayment)
-		json.Unmarshal([]byte(playground.VASuccessResponse), &newRespPayment)
-		if newRespPayment["transaction_status"] == "settlement" {
-			currentOrderStatus = 90000
-			CompletePaymentTxParams := schemas.PaymentTxParams{
-				OrderID:       order.ID,
-				OrderStatus:   currentOrderStatus,
-				PaymentStatus: currentOrderStatus,
-			}
-			_, err := server.transaction.CompletePaymentTx(context.Background(), CompletePaymentTxParams)
-			if err != nil {
-				log.Fatal(fmt.Errorf("[Failed] Update Complete Data: %s", err.Error()))
-			}
-		}
+	var currentOrderStatus int32
+	// Check Payment Status
+	// url : http://localhost:5000/check-status
+	type reqParam struct {
+		orderID string `json:"order_id"`
 	}
-//}
+	request := reqParam{
+		orderID: fmt.Sprintf("%d", order.OrderNumber),
+	}
+	requestJson, err := json.Marshal(request)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(requestJson))
+	//resp, err := http.Post("http://localhost:5000/va", "application/json",
+	//	bytes.NewBuffer(requestJson))
 
-func (server *Server) GetPaymentGateway() gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		paymentGateways, err := server.transaction.SelectPaymentGateways(ctx)
-		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, errorResponse(err))
-			return
+	var newRespPayment map[string]interface{}
+
+	//json.NewDecoder(respPayment.Body).Decode(&newRespPayment)
+	json.Unmarshal([]byte(playground.VASuccessResponse), &newRespPayment)
+	if newRespPayment["transaction_status"] == "settlement" {
+		currentOrderStatus = 90000
+		CompletePaymentTxParams := schemas.PaymentTxParams{
+			OrderID:       order.ID,
+			OrderStatus:   currentOrderStatus,
+			PaymentStatus: currentOrderStatus,
 		}
-
-		ctx.IndentedJSON(http.StatusOK, paymentGateways)
+		_, err := server.transaction.CompletePaymentTx(context.Background(), CompletePaymentTxParams)
+		if err != nil {
+			log.Fatal(fmt.Errorf("[Failed] Update Complete Data: %s", err.Error()))
+		}
 	}
 }
 
+func (server *Server) GetValidPrice2(ctx *gin.Context) {
+	var req schemas.GetValidPriceRequest
+	if err := ctx.ShouldBindQuery(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf(" GetOrderList : %s", err.Error())))
+		return
+	}
+
+	offerIDs := strings.Split(req.OfferID, ",")
+	var ids []int32
+	for _, id := range offerIDs {
+		i, err := strconv.Atoi(id)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf("wrong offers input")))
+		}
+		ids = append(ids, int32(i))
+	}
+	checkPricingParam := schemas.CheckPricingRequest{
+		UserID:           req.UserID,
+		OfferID:          ids,
+		PaymentGatewayID: req.PaymentGatewayID,
+		PlatformID:       req.PlatformID,
+		DiscountCode:     req.DiscountCode,
+		CurrencyCode:     req.CurrencyCode,
+		GeoInfo:          schemas.GeoInfo{CountryCode: req.CountryCode},
+	}
+	pricingOffer, err := server.transaction.PricingTx2(ctx, checkPricingParam)
+	fmt.Println("errrreee", err)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, errorResponse(err))
+		return
+	}
+	ctx.IndentedJSON(http.StatusOK, successResponse("Success", pricingOffer))
+	return
+}
+
+//func (server *Server) RemoteCheckout(ctx *gin.Context) {
+//	server.requireAuthentication()
+//
+//	server.Logger.SetPrefix("DEBUG - ")
+//	server.Logger.Println("=========== Request =============")
+//	startTime := time.Now()
+//
+//	var req schemas.RemoteCheckoutRequest
+//	if err := ctx.ShouldBindJSON(&req); err != nil {
+//		ctx.JSON(http.StatusBadRequest, errorResponse(fmt.Errorf(" Remote Checkout : %s", err.Error())))
+//		return
+//	}
+//
+//	// check user is exist
+//
+//
+//	server.Logger.Println("=========== End =============")
+//	server.Logger.Println("Complete in :", time.Since(startTime))
+//	server.Logger.Println("=========== Response =============")
+//	server.Logger.Println(response)
+//	ctx.JSON(http.StatusCreated, successResponse("Success Create Order", response))
+//	return
+//}

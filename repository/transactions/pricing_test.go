@@ -191,6 +191,7 @@ func TestPricing(t *testing.T) {
 			offerDetails = append(offerDetails, o)
 		}
 		result, err := Pricing(testQueries, context.Background(), testCase.request, offerDetails)
+		fmt.Println(result)
 		if result.TotalFinalPrice != testCase.expectFinal{
 			t.Errorf(testCase.name, ": ", err)
 			require.Equal(t, testCase.expectFinal, result.TotalFinalPrice)

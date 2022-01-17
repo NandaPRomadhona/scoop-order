@@ -1,110 +1,54 @@
-package logger
+package logging
 
 import (
-	"encoding/json"
-	"io"
-	"os"
-	"runtime/debug"
-	"sync"
-	"time"
+	"github.com/sirupsen/logrus"
 )
 
-type Level int8
+// Event stores messages to log later, from our standard interface
+type Event struct {
+	id      int
+	message string
+}
 
-const (
-	LevelInfo Level = iota
-	LevelWarning
-	LevelDebug
-	LevelError
-	LevelFatal
-	LevelOff
+// StandardLogger enforces specific log message formats
+type StandardLogger struct {
+	*logrus.Logger
+}
+
+// NewLogger initializes the standard logger
+func NewLogger() *StandardLogger {
+	var baseLogger = logrus.New()
+
+	var standardLogger = &StandardLogger{baseLogger}
+
+	standardLogger.Formatter = &logrus.JSONFormatter{}
+
+	return standardLogger
+}
+
+// Declare variables to store log messages as new Events
+var (
+	invalidArgMessage      = Event{1, "Invalid arg: %s"}
+	invalidArgValueMessage = Event{2, "Invalid value for argument: %s: %v"}
+	missingArgMessage      = Event{3, "Missing arg: %s"}
+	ServerErrors           = Event{id: 4, message: "Server Error args: %s"}
 )
 
-func (l Level) String() string {
-	switch l {
-	case LevelInfo:
-		return "INFO"
-	case LevelWarning:
-		return "WARNING"
-	case LevelDebug:
-		return "DEBUG"
-	case LevelError:
-		return "ERROR"
-	case LevelFatal:
-		return "FATAL"
-	default:
-		return ""
-	}
+// InvalidArg is a standard error message
+func (l *StandardLogger) InvalidArg(argumentName string) {
+	l.Errorf(invalidArgMessage.message, argumentName)
 }
 
-type Logger struct {
-	out      io.Writer
-	minLevel Level
-	mu       sync.Mutex
+// InvalidArgValue is a standard error message
+func (l *StandardLogger) InvalidArgValue(argumentName string, argumentValue string) {
+	l.Errorf(invalidArgValueMessage.message, argumentName, argumentValue)
 }
 
-func NewLogger(out io.Writer, minLevel Level) *Logger {
-	return &Logger{
-		out:      out,
-		minLevel: minLevel,
-	}
+// MissingArg is a standard error message
+func (l *StandardLogger) MissingArg(argumentName string) {
+	l.Errorf(missingArgMessage.message, argumentName)
 }
 
-func (l *Logger) PrintInfo(message string, properties map[string]string) {
-	l.print(LevelInfo, message, properties)
-}
-
-func (l *Logger) PrintWarning(message string, properties map[string]string) {
-	l.print(LevelWarning, message, properties)
-}
-
-func (l *Logger) PrintDebug(message string, properties map[string]string) {
-	l.print(LevelDebug, message, properties)
-}
-
-func (l *Logger) PrintError(err error, properties map[string]string) {
-	l.print(LevelError, err.Error(), properties)
-}
-
-func (l *Logger) PrintFatal(err error, properties map[string]string) {
-	l.print(LevelFatal, err.Error(), properties)
-	os.Exit(1)
-}
-
-func (l *Logger) print(level Level, message string, properties map[string]string) (int, error) {
-	if level < l.minLevel {
-		return 0, nil
-	}
-	aux := struct {
-		Level      string            `json:"level"`
-		Time       string            `json:"time"`
-		Message    string            `json:"message"`
-		Properties map[string]string `json:"properties,omitempty"`
-		Trace      string            `json:"trace,omitempty"`
-	}{
-		Level:      level.String(),
-		Time:       time.Now().UTC().Format(time.ANSIC),
-		Message:    message,
-		Properties: properties,
-	}
-
-	if level >= LevelError {
-		aux.Trace = string(debug.Stack())
-	}
-
-	var line []byte
-
-	line, err := json.Marshal(aux)
-	if err != nil {
-		line = []byte(LevelError.String() + ": unable to marshal log message:" + err.Error())
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	return l.out.Write(append(line, '\n'))
-}
-
-func (l *Logger) Write(message []byte) (n int, err error) {
-	return l.print(LevelError, string(message), nil)
+func (l *StandardLogger) ServerErrors(argumentName string, argumentValue string) {
+	l.Errorf(ServerErrors.message, argumentName, argumentValue)
 }

@@ -595,8 +595,8 @@ type OrderPublished struct {
 	OrderNumber       int     `json:"order_number"`
 }
 
-func DestructorsOrders(orders []databases.CoreOrder) interface{} {
-	var Orders []interface{}
+func DestructorsOrders(orders []databases.CoreOrder) []OrderPublished {
+	var Orders []OrderPublished
 
 	for _, hit := range orders {
 		id := hit.ID
@@ -611,7 +611,7 @@ func DestructorsOrders(orders []databases.CoreOrder) interface{} {
 		finalAmount := hit.FinalAmount
 		orderNumber := hit.OrderNumber
 
-		Orders = append(Orders, &OrderPublished{
+		Orders = append(Orders, OrderPublished{
 			OrderID:           id,
 			PartnerID:         partnerID.Int32,
 			IsActive:          isActive.Bool,
@@ -781,6 +781,47 @@ func (q *Queries) SelectOrderDetail(ctx context.Context, orderID sql.NullInt32) 
 		&i.ClientVersion,
 		&i.DeviceModel,
 		&i.TemporderID,
+	)
+	return i, err
+}
+
+const createOrderlineDiscount = `-- name: createOrderlineDiscount :one
+INSERT INTO public.core_orderlinediscounts(
+	created, modified, order_id, orderline_id, discount_id, discount_name, currency_code, discount_code, discount_type, discount_value, raw_price, final_price)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING created, modified, id, order_id, orderline_id, discount_id, discount_name, currency_code, discount_code, discount_type, discount_value, raw_price, final_price
+`
+
+func (q *Queries) CreateOrderlineDiscount(ctx context.Context, arg databases.CoreOrderlineDiscount) (databases.CoreOrderlineDiscount, error) {
+	row := q.db.QueryRowContext(ctx, createOrderDetail,
+		arg.Created,
+		arg.Modified,
+		arg.OrderID,
+		arg.OrderlineID,
+		arg.DiscountID,
+		arg.DiscountName,
+		arg.CurrencyCode,
+		arg.DiscountCode,
+		arg.DiscountType,
+		arg.DiscountValue,
+		arg.RawPrice,
+		arg.FinalPrice,
+	)
+	var i databases.CoreOrderlineDiscount
+	err := row.Scan(
+		&i.Created,
+		&i.Modified,
+		&i.ID,
+		&i.OrderID,
+		&i.OrderlineID,
+		&i.DiscountID,
+		&i.DiscountName,
+		&i.CurrencyCode,
+		&i.DiscountCode,
+		&i.DiscountType,
+		&i.DiscountValue,
+		&i.RawPrice,
+		&i.FinalPrice,
 	)
 	return i, err
 }

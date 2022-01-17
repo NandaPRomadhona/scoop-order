@@ -71,7 +71,7 @@ func (q *Queries) SelectItemOfSingleOffer(ctx context.Context, offerID int32) (S
 }
 
 const selectRestrictCountriesByOffer = `-- name: selectRestrictCountriesByItem :one
-Select o.id, i.name, i.item_distribution_country_group_id, dc.countries, dc.group_type from core_offers_items oi 
+Select o.id, i.name, i.item_distribution_country_group_id, dc.countries, dc.group_type as restrict_type from core_offers_items oi 
 join core_offers o on oi.offer_id = o.id 
 join core_items i on oi.item_id = i.id
 join core_distributioncountries dc on i.item_distribution_country_group_id = dc.id

@@ -13,7 +13,9 @@ import (
 type Transaction interface {
 	repository.Querier
 	PricingTx(ctx context.Context, arg schemas.CheckPricingRequest) (schemas.CheckPricingResponse, error)
+	PricingTx2(ctx context.Context, arg schemas.CheckPricingRequest) (schemas.CheckPricingResponse, error)
 	CheckoutTx(ctx context.Context, arg schemas.CheckoutTxParams) (schemas.CheckoutTxResult, error)
+	CheckoutTx2(ctx context.Context, arg schemas.CheckoutTxParams) (schemas.CheckoutTxResult, error)
 	PaymentTx(ctx context.Context, checkout schemas.CheckoutTxResult, paymentStatus int32) error
 	CompletePaymentTx(ctx context.Context, arg schemas.PaymentTxParams) (string, error)
 }

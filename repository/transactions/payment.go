@@ -17,7 +17,7 @@ func (transaction *SQLTransaction) PaymentTx(ctx context.Context, checkout schem
 
 	err := transaction.execDBTx(ctx, func(q *repository.Queries) error {
 		var err error
-		// Update Order data (WAITING_FOR_PAYMENT = 20001)
+
 		paymentArg := repository.CreatePaymentParams{
 			OrderID:              checkout.OrderID,
 			UserID:               checkout.UserID,

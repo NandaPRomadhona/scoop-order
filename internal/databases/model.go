@@ -253,3 +253,38 @@ type CoreOrderDetail struct {
 	DeviceModel       sql.NullString `json:"device_model"`
 	TemporderID       sql.NullInt32  `json:"temporder_id"`
 }
+
+type CoreOrderlineDiscount struct {
+	Created       sql.NullTime   `json:"created"`
+	Modified      sql.NullTime   `json:"modified"`
+	ID            int32          `json:"id"`
+	OrderID       int32          `json:"order_id"`
+	OrderlineID   int32          `json:"orderline_id"`
+	DiscountID    int32          `json:"discount_id"`
+	DiscountName  sql.NullString `json:"discount_name"`
+	CurrencyCode  sql.NullString `json:"currency_code"`
+	DiscountCode  sql.NullString `json:"discount_code"`
+	DiscountType  int32
+	DiscountValue float64 `json:"discount_value"`
+	RawPrice      float64 `json:"raw_price"`
+	FinalPrice    float64 `json:"final_price"`
+}
+
+type CoreItem struct {
+	Id           int            `json:"id"`
+	Name         string         `json:"name"`
+	EditionCode  string         `json:"edition_code"`
+	ReleaseDate  time.Time      `json:"release_date"`
+	IsFeatured   bool           `json:"is_featured"`
+	IsExtra      bool           `json:"is_extra"`
+	IsActive     bool           `json:"is_active"`
+	BrandId      int            `json:"brand_id"`
+	ItemType     string         `json:"item_type"`
+	ContentType  sql.NullString `json:"content_type"`
+	ItemStatus   sql.NullString `json:"item_status"`
+	Meta         sql.NullString `json:"meta"`
+	ParentItemId sql.NullInt32  `json:"parent_item_id"`
+	Created      time.Time      `json:"created"`
+	Modified     time.Time      `json:"modified"`
+}
+

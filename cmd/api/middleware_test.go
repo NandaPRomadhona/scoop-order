@@ -43,7 +43,7 @@ func TestServerAuthenticate(t *testing.T) {
 	}{
 		{
 			name: "OK",
-			setupAuth: field{name: "auth", value: "JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdhbml6YXRpb25zIjpbMTEwMDI3Nl0sInVzZXJfaWQiOjIyMTc2MzAsImV4cCI6MTYzNzgyNjA2NSwicm9sZXMiOlsxLDldLCJpc3MiOiJTQ09PUCIsInNpZyI6IjIzNTI5NmU5Y2M5ZGJiYjMxMGEyNzNjZTVjMmQyMzc5MTE3ZWY3MzUiLCJleHBpcmVfdGltZWRlbHRhIjowLCJ1c2VyX25hbWUiOiJuYW5kYUBncmFtZWRpYS5pZCIsImVtYWlsIjoibmFuZGFAZ3JhbWVkaWEuaWQiLCJkZXZpY2VfaWQiOm51bGx9.amGYbJZmTZ5QkFvuu0vm1Eh0guRS_JrUtF75jmnV0JU"},
+			setupAuth: field{name: "auth", value: "JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdhbml6YXRpb25zIjpbXSwidXNlcl9pZCI6MTg1NTQwNiwiZXhwIjoxNjM5NjM3NjczLCJyb2xlcyI6WzEsMTBdLCJpc3MiOiJTQ09PUCIsInNpZyI6IjVhYzQ5NTJkYjljZDA2YTNiODhlODU1NThkMGRjYTkxZGQ0NzNlMjgiLCJleHBpcmVfdGltZWRlbHRhIjowLCJ1c2VyX25hbWUiOiJuYW5kYUBncmFtZWRpYS5pZCIsImVtYWlsIjoibmFuZGFAZ3JhbWVkaWEuaWQiLCJkZXZpY2VfaWQiOm51bGx9.E-81BQw02-i5vVWWsYVe53Gpz8MTm0ZyfTXM3dxPqZQ"},
 			checkResponse: func(t *testing.T, recorder *httptest.ResponseRecorder) {
 				require.Equal(t, http.StatusOK, recorder.Code)
 			},

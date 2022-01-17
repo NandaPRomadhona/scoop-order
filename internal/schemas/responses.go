@@ -7,6 +7,7 @@ import (
 
 type Offer struct {
 	OfferID    int32   `json:"offer_id"`
+	Name       string  `json:"name"`
 	BasePrice  float64 `json:"base_price"`
 	FinalPrice float64 `json:"final_price"`
 	Discount   float64 `json:"discount"`
