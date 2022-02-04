@@ -78,8 +78,11 @@ func (transaction *SQLTransaction) PricingTx(ctx context.Context, arg schemas.Ch
 
 func (transaction *SQLTransaction) PricingTx2(ctx context.Context, arg schemas.CheckPricingRequest) (schemas.CheckPricingResponse, error) {
 	var response schemas.CheckPricingResponse
+	var discountTemps map[int][]schemas.DiscountTemp
 	key := "GetPrice_" + string(arg.UserID) + string(arg.OfferID) + arg.DiscountCode
+	keyDiscount := "DiscountTemp" + string(arg.UserID) + string(arg.OfferID) + arg.DiscountCode
 	val, err := transaction.clientRedis.Get(key).Result()
+	valDiscount, err := transaction.clientRedis.Get(keyDiscount).Result()
 	if err != nil {
 		fmt.Println("ERROR: ", err.Error())
 	}
@@ -88,21 +91,19 @@ func (transaction *SQLTransaction) PricingTx2(ctx context.Context, arg schemas.C
 		if err != nil {
 			return response, err
 		}
+		err = json.Unmarshal([]byte(valDiscount), &discountTemps)
+		if err != nil {
+			//fmt.Println(err)
+			return response, err
+		}
 		return response, nil
 	}
-
-	err = transaction.execDBTx(ctx, func(q *repository.Queries) error {
-		offers, err := CheckOffers(ctx, q, arg.OfferID, arg.GeoInfo, arg.CurrencyCode)
-		if err != nil {
-			return err
-		}
-		response, err = Pricing2(q, ctx, arg, offers)
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("OK")
-	})
-	if err.Error() != "OK" {
+	offers, err := CheckOffers(ctx, transaction.Queries, arg.OfferID, arg.GeoInfo, arg.CurrencyCode)
+	if err != nil {
+		return response, err
+	}
+	response, discountTemps, err = Pricing2(transaction.Queries, ctx, arg, offers)
+	if err != nil {
 		return response, err
 	}
 
@@ -112,8 +113,16 @@ func (transaction *SQLTransaction) PricingTx2(ctx context.Context, arg schemas.C
 		fmt.Println("errJson : ", errJson)
 	}
 
-	errRedis := transaction.clientRedis.Set(key, redisData, time.Minute).Err()
+	redisDiscountTemp, errJson := json.Marshal(discountTemps)
 
+	errRedis := transaction.clientRedis.Set(key, redisData, configs.RedisDuration * time.Minute ).Err()
+
+	if errRedis != nil {
+		fmt.Println(errRedis)
+		fmt.Println("belum tersimpan di redis nih")
+	}
+
+	errRedis = transaction.clientRedis.Set(keyDiscount, redisDiscountTemp, time.Minute).Err()
 	if errRedis != nil {
 		fmt.Println(errRedis)
 		fmt.Println("belum tersimpan di redis nih")
@@ -682,7 +691,7 @@ func constructFinalPrice(offerDetails []databases.CoreOffer, currency string) sc
 	}
 }
 
-func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckPricingRequest, offerDetails []databases.CoreOffer) (schemas.CheckPricingResponse, error) {
+func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckPricingRequest, offerDetails []databases.CoreOffer) (schemas.CheckPricingResponse, map[int][]schemas.DiscountTemp, error) {
 	//  construct the response
 	var pricingResponse schemas.CheckPricingResponse
 	var dc databases.CoreDiscountcode
@@ -691,54 +700,55 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 	var isDiscountCode = false
 	var isDCCanUsed = false
 	var msg string
+	var discountTemps = make(map[int][]schemas.DiscountTemp)
 
 	pricingResponse = constructFinalPrice(offerDetails, request.CurrencyCode)
-
 	/*check discount code can be used*/
 	if request.DiscountCode != "" {
 		dc, err = q.SelectDiscountCodeByCode(ctx, request.DiscountCode)
 		if err != nil {
 			log.Println(err)
-			return pricingResponse, fmt.Errorf("[ERROR] discount code not found")
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount code not found")
 		}
 		discountOfDC, err = q.SelectDiscountByID(ctx, dc.DiscountID)
 		if err != nil {
-			return pricingResponse, fmt.Errorf("[ERROR] discount is not available")
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount is not available")
 		}
 		_, err = q.SelectAllowedPG(ctx, discountOfDC.ID, request.PaymentGatewayID)
 		if err != nil {
-			return pricingResponse, fmt.Errorf("[ERROR] discount is not available for preferred payment gateway")
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount is not available for preferred payment gateway")
 		}
 		_, err = q.SelectAllowedPlatform(ctx, discountOfDC.ID, request.PlatformID)
 		if err != nil {
-			return pricingResponse, fmt.Errorf("[ERROR] discount is not available for preferred platform")
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount is not available for preferred platform")
 		}
 		isDiscountCode = true
 	}
+	if isDiscountCode{
+		// 1. Check due date
+		if time.Now().Before(discountOfDC.ValidTo) && time.Now().After(discountOfDC.ValidFrom) {
+			isDCCanUsed = true
+		} else {
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount is not valid")
+		}
 
-	// 1. Check due date
-	if time.Now().Before(discountOfDC.ValidTo) && time.Now().After(discountOfDC.ValidFrom) {
-		isDCCanUsed = true
-	} else {
-		return pricingResponse, fmt.Errorf("[ERROR] discount is not valid")
-	}
+		// 2. Check Max User
+		if dc.MaxUses.Int32 > 0 && dc.CurrentUses.Int32 >= dc.MaxUses.Int32 {
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount code is not valid (out of max uses number)")
+		}
 
-	// 2. Check Max User
-	if dc.MaxUses.Int32 > 0 && dc.CurrentUses.Int32 >= dc.MaxUses.Int32 {
-		return pricingResponse, fmt.Errorf("[ERROR] discount code is not valid (out of max uses number)")
-	}
-
-	// 3. Check Max Min
-	isDCCanUsed, msg = checkMinMaxPrice(pricingResponse.TotalBasePrice, request.CurrencyCode, discountOfDC)
-	if isDCCanUsed == false {
-		return pricingResponse, fmt.Errorf("[ERROR] discount code is not valid (%s)", msg)
+		// 3. Check Max Min
+		isDCCanUsed, msg = checkMinMaxPrice(pricingResponse.TotalBasePrice, request.CurrencyCode, discountOfDC)
+		if isDCCanUsed == false {
+			return pricingResponse, discountTemps, fmt.Errorf("[ERROR] discount code is not valid (%s)", msg)
+		}
 	}
 
 	//	check offer discount
 	var isOfferHaveDiscount = make(map[int]bool)
 	for idxOffer, offer := range offerDetails {
-		discounGoCut := false
-		var validDiscountOffer []databases.CoreDiscount
+		discountGoCut := false
+		var validDiscountOffer databases.CoreDiscount
 		if offer.IsDiscount.Bool && !request.IsRenewal {
 			var discountIDs []int32
 			for _, discount := range offer.DiscountID {
@@ -751,29 +761,37 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 			}
 			for _, discount := range discountData {
 				if time.Now().Before(discount.ValidTo) && time.Now().After(discount.ValidFrom) {
-					discounGoCut = true
-					validDiscountOffer = append(validDiscountOffer, discount)
+					discountGoCut = true
+					validDiscountOffer = discount
+					break
 				}
 			}
 		}
 
 		// cut offer price by discount
-		if discounGoCut {
+		if discountGoCut {
 			isOfferHaveDiscount[idxOffer] = true
-			for _, discount := range validDiscountOffer {
-				// Check Trial discount
-				/* ... */
-				// temp discount
-				if offer.IsFree.Bool {
-					pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].FinalPrice
-					pricingResponse.Offers[idxOffer].FinalPrice = 0.0
-					break
-				} else {
-					finalOfferPrice, _ := calDiscount(discount, offer, pricingResponse.Offers[idxOffer].FinalPrice, pricingResponse.CurrencyCode)
-					pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].Discount + (pricingResponse.Offers[idxOffer].FinalPrice - finalOfferPrice)
-					pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
-				}
+			// Check Trial discount
+			/* ... */
+			// temp discount
+			discountTemp := schemas.DiscountTemp{
+				DiscountID:   validDiscountOffer.ID,
+				DiscountName: validDiscountOffer.Name,
+				CurrencyCode: request.CurrencyCode,
+				DiscountType: validDiscountOffer.DiscountType.Int32,
 			}
+			if offer.IsFree.Bool {
+				pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].BasePrice
+				pricingResponse.Offers[idxOffer].FinalPrice = 0.0
+			} else {
+				finalOfferPrice, _ := calDiscount(validDiscountOffer, offer, pricingResponse.Offers[idxOffer].FinalPrice, pricingResponse.CurrencyCode)
+				pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].Discount + (pricingResponse.Offers[idxOffer].FinalPrice - finalOfferPrice)
+				pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
+			}
+			discountTemp.DiscountValue = pricingResponse.Offers[idxOffer].Discount
+			discountTemp.RawPrice = pricingResponse.Offers[idxOffer].BasePrice
+			discountTemp.FinalPrice = pricingResponse.Offers[idxOffer].FinalPrice
+			discountTemps[idxOffer] = append(discountTemps[idxOffer], discountTemp)
 		} else {
 			// CHECK DISCOUNT DATA =============================== [ PREDEFINED GROUP, SUCKS ]
 			var items []databases.CoreItem
@@ -781,41 +799,48 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 			if offer.OfferTypeID == configs.OfferTypeSingle && offer.OfferTypeID == configs.OfferTypeBundle {
 				items, err = q.SelectItemByOfferID(ctx, offer.ID)
 				if err != nil {
-					return pricingResponse, fmt.Errorf("[ERROR] has any problem in select item (%s)", err.Error())
+					return pricingResponse, discountTemps, fmt.Errorf("[ERROR] has any problem in select item (%s)", err.Error())
 				}
 			} else if offer.OfferTypeID == configs.OfferTypeSubscription {
 				isSingle = false
 				items, err = q.SelectItemBrandByOfferID(ctx, offer.ID)
 				if err != nil {
-					return pricingResponse, fmt.Errorf("[ERROR] has any problem in select item (%s)", err.Error())
+					return pricingResponse, discountTemps, fmt.Errorf("[ERROR] has any problem in select item (%s)", err.Error())
 				}
 			}
-			var group_predefined []int32
+			var groupPredefined []int32
 			var discounts []databases.CoreDiscount
 			if len(items) > 0 {
 				switch items[0].ItemType {
 				case configs.ItemTypeMagazine:
 					if isSingle {
-						group_predefined = []int32{4, 1, 5, 7}
+						groupPredefined = []int32{4, 1, 5, 7}
 					} else {
-						group_predefined = []int32{4, 1, 6, 8}
+						groupPredefined = []int32{4, 1, 6, 8}
 					}
 				case configs.ItemTypeBook:
 					//	# HARPER COLLINS 5% := 467
 					if items[0].BrandId == 467 {
-						group_predefined = []int32{467}
+						groupPredefined = []int32{467}
 					} else {
-						group_predefined = []int32{4, 2, 5}
+						groupPredefined = []int32{4, 2, 5}
 					}
 				case configs.ItemTypeNewspaper:
-					group_predefined = []int32{4, 3, 6}
+					groupPredefined = []int32{4, 3, 6}
 				}
 			}
-			discounts, err = q.SelectDiscountByPredefinedGroups(ctx, group_predefined, request.PlatformID, request.PaymentGatewayID, time.Now().String())
-			if err != nil{
+			discounts, err = q.SelectDiscountByPredefinedGroups(ctx, groupPredefined, request.PlatformID, request.PaymentGatewayID, time.Now().String())
+			if err != nil {
 				discounts = []databases.CoreDiscount{}
 			}
 			if len(discounts) > 1 {
+				// temp discount
+				discountTemp := schemas.DiscountTemp{
+					DiscountID:   validDiscountOffer.ID,
+					DiscountName: validDiscountOffer.Name,
+					CurrencyCode: request.CurrencyCode,
+					DiscountType: validDiscountOffer.DiscountType.Int32,
+				}
 				isOfferHaveDiscount[idxOffer] = true
 				if offer.IsFree.Bool {
 					pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].FinalPrice
@@ -825,6 +850,10 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 					pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].Discount + (pricingResponse.Offers[idxOffer].FinalPrice - finalOfferPrice)
 					pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
 				}
+				discountTemp.DiscountValue = pricingResponse.Offers[idxOffer].Discount
+				discountTemp.RawPrice = pricingResponse.Offers[idxOffer].BasePrice
+				discountTemp.FinalPrice = pricingResponse.Offers[idxOffer].FinalPrice
+				discountTemps[int(offer.ID)] = append(discountTemps[int(offer.ID)], discountTemp)
 			} else {
 				isOfferHaveDiscount[idxOffer] = false
 			}
@@ -853,23 +882,43 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 				if discountOfDC.DiscountRule.Int32 == configs.DiscountRuleAmount {
 					allowed += 1
 				}
-				if isOfferHaveDiscount[idxOffer]{
+				// temp discount
+				discountTemp := schemas.DiscountTemp{
+					DiscountID:   discountOfDC.ID,
+					DiscountName: discountOfDC.Name,
+					CurrencyCode: request.CurrencyCode,
+					DiscountType: discountOfDC.DiscountType.Int32,
+					DiscountCode: dc.Code,
+				}
+				if isOfferHaveDiscount[idxOffer] {
 					/*	check if coupon code can override the others promo?
-					 if cant, calculate from base prices
-					 if can, (stack promo calculations )*/
-					if dc.DiscountType.Int32 == configs.DiscountAllowedJoin{
+					if cant, calculate from base prices
+					if can, (stack promo calculations )*/
+					if dc.DiscountType.Int32 == configs.DiscountAllowedJoin {
 						finalOfferPrice, _ := calDiscount(discountOfDC, offer, pricingResponse.Offers[idxOffer].FinalPrice, pricingResponse.CurrencyCode)
 						pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].Discount + (pricingResponse.Offers[idxOffer].FinalPrice - finalOfferPrice)
 						pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
+						discountTemp.DiscountValue = pricingResponse.Offers[idxOffer].Discount
+						discountTemp.RawPrice = pricingResponse.Offers[idxOffer].BasePrice
+						discountTemp.FinalPrice = pricingResponse.Offers[idxOffer].FinalPrice
+						discountTemps[int(offer.ID)] = append(discountTemps[int(offer.ID)], discountTemp)
 					} else {
 						finalOfferPrice, _ := calDiscount(discountOfDC, offer, pricingResponse.Offers[idxOffer].BasePrice, pricingResponse.CurrencyCode)
 						pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].BasePrice - finalOfferPrice
 						pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
+						discountTemp.DiscountValue = pricingResponse.Offers[idxOffer].Discount
+						discountTemp.RawPrice = pricingResponse.Offers[idxOffer].BasePrice
+						discountTemp.FinalPrice = pricingResponse.Offers[idxOffer].FinalPrice
+						discountTemps[int(offer.ID)][0] = discountTemp
 					}
 				} else {
 					finalOfferPrice, _ := calDiscount(discountOfDC, offer, pricingResponse.Offers[idxOffer].FinalPrice, pricingResponse.CurrencyCode)
 					pricingResponse.Offers[idxOffer].Discount = pricingResponse.Offers[idxOffer].Discount + (pricingResponse.Offers[idxOffer].FinalPrice - finalOfferPrice)
 					pricingResponse.Offers[idxOffer].FinalPrice = finalOfferPrice
+					discountTemp.DiscountValue = pricingResponse.Offers[idxOffer].Discount
+					discountTemp.RawPrice = pricingResponse.Offers[idxOffer].BasePrice
+					discountTemp.FinalPrice = pricingResponse.Offers[idxOffer].FinalPrice
+					discountTemps[int(offer.ID)] = append(discountTemps[int(offer.ID)], discountTemp)
 				}
 			}
 		}
@@ -899,5 +948,5 @@ func Pricing2(q *repository.Queries, ctx context.Context, request schemas.CheckP
 	pricingResponse.TotalFinalPrice = totalFinalPrice
 	pricingResponse.TotalDiscount = totalDiscount
 
-	return pricingResponse, nil
+	return pricingResponse, discountTemps, nil
 }

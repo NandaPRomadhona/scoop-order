@@ -1,6 +1,9 @@
 package configs
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 var DBUser = os.Getenv("DB_USER")
 var DBPassword = os.Getenv("DB_PASS")
@@ -12,4 +15,5 @@ var RedisPass = os.Getenv("REDIS_PASS")
 var JWTSecrete = os.Getenv("JWT_SECRET")
 var AuthCoopPayment = os.Getenv("AUTH_SCOOP_PAYMENT")
 var URLScoopPayment = os.Getenv("URL_SCOOP_PAYMENT")
+var RedisDuration = time.Duration(2)
 

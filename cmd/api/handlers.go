@@ -230,7 +230,7 @@ func (server *Server) Checkout(ctx *gin.Context) {
 	}
 
 	// Create orders (NEW)
-	checkout, err := server.transaction.CheckoutTx(ctx, arg)
+	checkout, err := server.transaction.CheckoutTx2(ctx, arg)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, errorResponse(fmt.Errorf("checkoutTX : %s", err.Error())))
 		return
@@ -557,6 +557,7 @@ func (server *Server) GetValidPrice2(ctx *gin.Context) {
 		}
 		ids = append(ids, int32(i))
 	}
+	fmt.Println("request: ", req.DiscountCode == "")
 	checkPricingParam := schemas.CheckPricingRequest{
 		UserID:           req.UserID,
 		OfferID:          ids,
@@ -567,7 +568,6 @@ func (server *Server) GetValidPrice2(ctx *gin.Context) {
 		GeoInfo:          schemas.GeoInfo{CountryCode: req.CountryCode},
 	}
 	pricingOffer, err := server.transaction.PricingTx2(ctx, checkPricingParam)
-	fmt.Println("errrreee", err)
 	if err != nil {
 		ctx.JSON(http.StatusConflict, errorResponse(err))
 		return

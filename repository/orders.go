@@ -793,7 +793,7 @@ RETURNING created, modified, id, order_id, orderline_id, discount_id, discount_n
 `
 
 func (q *Queries) CreateOrderlineDiscount(ctx context.Context, arg databases.CoreOrderlineDiscount) (databases.CoreOrderlineDiscount, error) {
-	row := q.db.QueryRowContext(ctx, createOrderDetail,
+	row := q.db.QueryRowContext(ctx, createOrderlineDiscount,
 		arg.Created,
 		arg.Modified,
 		arg.OrderID,

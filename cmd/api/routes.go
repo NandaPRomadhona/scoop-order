@@ -30,8 +30,8 @@ func (server *Server) Routes() *gin.Engine {
 
 		pricing := v1.Group("/finalPrice")
 		{
-			pricing.GET("", server.GetValidPrice)
-			pricing.GET("/v2", server.GetValidPrice2)
+			//pricing.GET("/v2", server.GetValidPrice)
+			pricing.GET("", server.GetValidPrice2)
 		}
 
 		checkout := v1.Group("/checkout")
